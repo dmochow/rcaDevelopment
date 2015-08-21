@@ -1,5 +1,5 @@
-function [dataOut,W,A,Rxx,Ryy,Rxy,dGen,h] = rcaRun(data,nReg,nComp,condRange,subjRange,show,locfile)
-% [DATAOUT,W,A,RXX,RYY,RXY]=RCARUN(DATA,[NREG],[NCOMP],[CONDRANGE],[SUBJRANGE],[SHOW],[LOCFILE])
+function [dataOut,W,A,Rxx,Ryy,Rxy,dGen,plotSettings] = rcaRun(data,nReg,nComp,condRange,subjRange,show,plotStyle)
+% [DATAOUT,W,A,RXX,RYY,RXY]=RCARUN(DATA,[NREG],[NCOMP],[CONDRANGE],[SUBJRANGE],[SHOW],[PLOTSTYLE])
 % perform RCA dimensionality reduction: learn reliability-maximizing filter
 %   and project data into the corresponding space
 % 
@@ -16,8 +16,13 @@ function [dataOut,W,A,Rxx,Ryy,Rxy,dGen,h] = rcaRun(data,nReg,nComp,condRange,sub
 % subjRange: if data is a cell array, a subset of subjects on which to
 %   learn RCA spatial filters (defaults to all subjects)
 % show: 1 (default) to show learned components, 0 to not show
-% locfile: electrode location file as required by topoplot (defaults to
-%   128-channel GSN hydrocell)
+% plotStyle: 'matchMaxSignsToRc1' (default) or 'orig'
+%   'matchMaxSignsToRc1' : the sign of the maximum magnitude value
+%       in each RC is matched to the sign of RC1's maximum magnitude value
+%       so that polarity colors are visually easier to compare. Each RC has
+%       identical symmetric colorbars.
+%   'orig' : each RC's topomap has its own autoscaled colorbar, and signs
+%       are preserved from the output of rcaTrain
 %
 % dataOut: if data is a cell, this is a corresponding cell array
 % (conditions x subjects) of dimensionality-reduced data volumes (samples x
@@ -34,7 +39,7 @@ function [dataOut,W,A,Rxx,Ryy,Rxy,dGen,h] = rcaRun(data,nReg,nComp,condRange,sub
 % (1) check subplot numbering
 % (2) check preComputeRcaCovariancesLoop for mean centering consistency
 
-if nargin<7 || isempty(locfile), locfile='GSN-HydroCel-128.sfp'; end;
+if nargin<7 || isempty(plotStyle), plotStyle = 'matchMaxSignsToRc1'; end;
 if nargin<6 || isempty(show), show=1; end;
 if nargin<5 || isempty(subjRange) 
     if iscell(data)
@@ -135,23 +140,58 @@ end
 
 if show
     h=figure;
+    
+    if strcmp(plotStyle,'matchMaxSignsToRc1')
+        symmetricColorbars = true;
+        alignPolarityToRc1 = true;
+    else % use original plotting conventions
+        symmetricColorbars = false;
+        alignPolarityToRc1 = false;        
+    end
+    
+    if symmetricColorbars
+        % for a consistent colorbar across RCs:
+        colorbarLimits = [min(A(:)),max(A(:))];
+        newExtreme = max(abs(colorbarLimits));
+        colorbarLimits = [-newExtreme,newExtreme];
+    else
+        colorbarLimits = [];
+    end
+    if alignPolarityToRc1
+        extremeVals = [min(A); max(A)];
+        for rc = 1:nComp
+            [~,f(rc)]=max(abs(extremeVals(:,rc)));
+        end
+        s = ones(1,nComp);
+        for rc = 2:nComp
+            if f(rc)~=f(1) % if the poles containing the maximum corr coef are different
+                s(rc) = -1; % we will flip the sign of that RC's time course & thus its corr coef values (in A) too
+            end
+        end
+    else
+        s = ones(1,nComp);
+    end
+    
+    plotSettings.signFlips = s;
+    plotSettings.colorbarLimits = colorbarLimits;
+    
     try
         for c=1:nComp
             subplot(3,nComp,c);
-            topoplot(A(:,c), locfile,'electrodes','off','numcontour',0);
+            plotOnEgi(s(c).*A(:,c),colorbarLimits);
             title(['RC' num2str(c)]);
             axis off;
         end
     catch
-        fprintf('call to topoplot() failed: check locfile. \n');
-        for c=1:nComp, subplot(3,nComp,c); plot(A(:,c),'*k'); end
+        fprintf('call to plotOnEgi() failed. Plotting electrode values in a 1D style instead.\n');
+        for c=1:nComp, subplot(3,nComp,c); plot(A(:,c),'*k-'); end
         title(['RC' num2str(c)]);
     end
     
     try
         for c=1:nComp
             subplot(3,nComp,c+nComp);
-            shadedErrorBar([],muData(:,c),semData(:,c),'k');
+            shadedErrorBar([],s(c).*muData(:,c),semData(:,c),'k');
             title(['RC' num2str(c) ' time course']);
             axis tight;
         end
